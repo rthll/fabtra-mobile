@@ -1,4 +1,4 @@
-import React from 'react';
+import React, { useEffect, useRef } from 'react';
 import { View, Text, TouchableOpacity, Modal, StyleSheet } from 'react-native';
 import { CameraView } from 'expo-camera';
 import { validationStyles } from '../../styles/validationStyles';
@@ -8,6 +8,25 @@ import { validationStyles } from '../../styles/validationStyles';
  * QR code scanner with enhanced UI and frame guidance
  */
 export function ScannerModal({ visible, hasPermission, onClose, onBarCodeScanned }) {
+  // O expo-camera dispara onBarcodeScanned varias vezes por segundo enquanto o QR
+  // estiver visivel. Sem trava, isso empilha alerts e executa o fluxo multiplas vezes.
+  // scannedRef ignora callbacks apos o primeiro scan e e resetada ao reabrir o modal.
+  const scannedRef = useRef(false);
+
+  useEffect(() => {
+    if (visible) {
+      scannedRef.current = false;
+    }
+  }, [visible]);
+
+  const handleBarcodeScanned = (event) => {
+    if (scannedRef.current) {
+      return;
+    }
+    scannedRef.current = true;
+    onBarCodeScanned?.(event);
+  };
+
   return (
     <Modal visible={visible} animationType="slide">
       <View style={validationStyles.scannerContainer}>
@@ -15,7 +34,7 @@ export function ScannerModal({ visible, hasPermission, onClose, onBarCodeScanned
           <>
             <CameraView
               style={StyleSheet.absoluteFillObject}
-              onBarcodeScanned={onBarCodeScanned}
+              onBarcodeScanned={handleBarcodeScanned}
               barcodeScannerSettings={{ barcodeTypes: ['qr'] }}
             />
             <View style={validationStyles.scannerOverlay}>
