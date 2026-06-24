@@ -25,6 +25,7 @@ import {
   loadPassengers as loadCachedPassengers,
   loadPendingValidations,
   loadValidationsForToday,
+  purgeOldValidationSnapshots,
   saveDriver,
   saveLastSyncAt,
   savePassengers,
@@ -39,6 +40,20 @@ const IMMEDIATE_SYNC_TIMEOUT_MS = 3000;
 const QR_LOOKUP_QUEUE_TYPE = 'qr-lookup';
 
 const isQueuedQrLookup = (validation) => validation?.queueType === QR_LOOKUP_QUEUE_TYPE;
+
+// QR alheio/invalido escaneado offline (passageiro nunca aparece no catalogo) viraria
+// item pending eterno, contado para sempre no badge. Apos esse prazo, descartamos.
+const QR_LOOKUP_MAX_AGE_DAYS = 7;
+
+const isQrLookupExpired = (queuedValidation) => {
+  const scanDate = queuedValidation?.date;
+  if (!scanDate) {
+    return false;
+  }
+
+  const diffMs = new Date(`${getTodayDateKey()}T00:00:00`) - new Date(`${scanDate}T00:00:00`);
+  return Math.floor(diffMs / 86400000) > QR_LOOKUP_MAX_AGE_DAYS;
+};
 
 const buildQrLookupValidationId = ({ date, line, scannedPassenger }) => (
   [
@@ -407,6 +422,9 @@ export function useValidationApp() {
     setSyncedValidations(validations);
     setPendingValidations(queuedValidations);
     setLastSyncAt(cachedLastSyncAt);
+
+    // Remove snapshots diarios antigos deste motorista (acumulo lento no AsyncStorage).
+    purgeOldValidationSnapshots(dataScope).catch(() => {});
   }, [dataScope]);
 
   const flushPendingQueue = useCallback(async (
@@ -441,6 +459,13 @@ export function useValidationApp() {
         );
 
         if (!passenger) {
+          // Passageiro ainda nao apareceu no catalogo. Descarta o item se ja passou
+          // do prazo (provavel QR alheio/invalido) para nao poluir a fila para sempre;
+          // caso contrario mantem pendente para uma proxima tentativa.
+          if (isQrLookupExpired(queuedValidation)) {
+            continue;
+          }
+
           remaining.push(getQueuedValidation(queuedValidation, {
             syncStatus: 'pending',
             syncError: '',
@@ -472,6 +497,35 @@ export function useValidationApp() {
           date: queuedValidation.date,
           clientTimestamp: queuedValidation.clientTimestamp,
         });
+      } else {
+        // Item normal da fila: o snapshot do passageiro (valid/passengerName/line)
+        // fica congelado no momento do scan. Se o passageiro foi renovado/editado
+        // antes do flush, esse snapshot diverge do doc atual e matchesPassengerSnapshot
+        // (firestore.rules) recusa o create com permission-denied -> falha permanente
+        // e enganosa. Reconstruimos o payload a partir do snapshot fresco do servidor
+        // (passengerCatalog vem do fetchPassengersSnapshot da sync corrente),
+        // preservando date/method/clientTimestamp originais.
+        const passenger = findPassengerFromQrPayload(passengerCatalog, queuedValidation);
+
+        if (passenger) {
+          validationToSync = buildValidationPayload({
+            passenger,
+            driver: syncDriver,
+            line: queuedValidation.line,
+            method: queuedValidation.method,
+            date: queuedValidation.date,
+            clientTimestamp: queuedValidation.clientTimestamp,
+          });
+        } else {
+          // O catalogo e a colecao inteira recem-buscada; ausencia significa que o
+          // passageiro foi removido do sistema. Mensagem verdadeira em vez de manter
+          // pendente para sempre ou exibir o permission-denied generico.
+          remaining.push(getQueuedValidation(queuedValidation, {
+            syncStatus: 'failed',
+            syncError: 'Passageiro removido do sistema; a validacao nao pode ser registrada.',
+          }));
+          continue;
+        }
       }
 
       const driverLineError = getDriverLineSyncError(validationToSync, syncDriver);
@@ -961,7 +1015,10 @@ export function useValidationApp() {
     (passenger) => supportsLine(passenger.lines || passenger.line, activeLine) && (
       (passenger.name || '').toLowerCase().includes(searchTerm.toLowerCase())
       || String(passenger.id || '').includes(searchTerm)
-      || String(passenger.phone || '').includes(searchTerm)
+      || (
+        !!searchTerm.replace(/\D/g, '')
+        && String(passenger.phone || '').replace(/\D/g, '').includes(searchTerm.replace(/\D/g, ''))
+      )
     )
   );
 

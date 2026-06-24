@@ -72,6 +72,32 @@ export async function savePendingValidations(scopeKey, validations) {
   await AsyncStorage.setItem(key, JSON.stringify(validations));
 }
 
+// As validacoes sao salvas em chaves diarias (validations::uid-YYYY-MM-DD). Sem
+// limpeza, elas se acumulam indefinidamente no AsyncStorage. Mantemos apenas os
+// ultimos dias e removemos as chaves mais antigas desse mesmo motorista.
+const VALIDATIONS_SNAPSHOT_RETENTION_DAYS = 3;
+
+export async function purgeOldValidationSnapshots(scopeKey) {
+  const prefix = scopedKey('validations', scopeKey);
+  if (!prefix) return;
+
+  const cutoffDate = new Date(`${getTodayDateKey()}T00:00:00`);
+  cutoffDate.setDate(cutoffDate.getDate() - VALIDATIONS_SNAPSHOT_RETENTION_DAYS);
+  const pad = (value) => String(value).padStart(2, '0');
+  const cutoff = `${cutoffDate.getFullYear()}-${pad(cutoffDate.getMonth() + 1)}-${pad(cutoffDate.getDate())}`;
+
+  const allKeys = await AsyncStorage.getAllKeys();
+  const staleKeys = allKeys.filter((key) => {
+    if (!key.startsWith(`${prefix}-`)) return false;
+    const datePart = key.slice(prefix.length + 1);
+    return /^\d{4}-\d{2}-\d{2}$/.test(datePart) && datePart < cutoff;
+  });
+
+  if (staleKeys.length > 0) {
+    await AsyncStorage.multiRemove(staleKeys);
+  }
+}
+
 export async function loadLastSyncAt(scopeKey) {
   const key = scopedKey(LAST_SYNC_KEY, scopeKey);
   if (!key) return '';
