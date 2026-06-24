@@ -37,7 +37,9 @@ export function Header({
       ? 'Sincronizacao pausada'
       : pendingSyncCount > 0
         ? `${pendingSyncCount} pendente(s)`
-        : 'Sincronizado';
+        : syncStatus === 'offline'
+          ? 'Sem conexao'
+          : 'Sincronizado';
 
   return (
     <View style={validationStyles.header}>
@@ -80,7 +82,7 @@ export function Header({
             onPress={onSyncPress}
             style={[
               validationStyles.syncBadge,
-              pendingSyncCount > 0 && validationStyles.syncBadgeOffline,
+              (pendingSyncCount > 0 || syncStatus === 'offline') && validationStyles.syncBadgeOffline,
               syncStatus === 'syncing' && validationStyles.syncBadgeSyncing,
               syncStatus === 'paused' && validationStyles.syncBadgePaused,
             ]}
